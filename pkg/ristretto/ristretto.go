@@ -5,7 +5,7 @@
 
 // Package ristretto implements the group of prime order
 //
-//     2**252 + 27742317777372353535851937790883648493
+//	2**252 + 27742317777372353535851937790883648493
 //
 // as specified in draft-hdevalence-cfrg-ristretto-01.
 //
@@ -21,14 +21,8 @@ import (
 	"filippo.io/edwards25519/field"
 )
 
-type Scalar = edwards25519.Scalar
-
-func NewScalar() *Scalar {
-	return edwards25519.NewScalar()
-}
-
-// Constants from draft-hdevalence-cfrg-ristretto-01, Section 3.1. See
-// TestConstants for their decimal values.
+// Constants from RFC 9496, Section 4.1.
+// See TestConstants for their decimal values.
 var (
 	d, _ = new(field.Element).SetBytes([]byte{
 		0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75,
@@ -102,7 +96,7 @@ func (e *Element) Set(x *Element) *Element {
 
 // Equal returns 1 if e is equivalent to ee, and 0 otherwise.
 //
-// Note that Elements must not be compared in any other way.
+// Equal implements the Equals operation from RFC 9496, Section 4.3.3.
 func (e *Element) Equal(ee *Element) int {
 	X1, Y1, _, _ := e.r.ExtendedCoordinates()
 	X2, Y2, _, _ := ee.r.ExtendedCoordinates()
@@ -120,10 +114,13 @@ func (e *Element) Equal(ee *Element) int {
 	return out
 }
 
-// SetUniformBytes deterministically sets e to an uniformly distributed value
+// SetUniformBytes deterministically sets e to a uniformly distributed value
 // given 64 uniformly distributed random bytes.
 //
 // This can be used for hash-to-group operations or to obtain a random element.
+//
+// SetUniformBytes implements the Element Derivation operation from RFC 9496,
+// Section 4.3.4.
 func (e *Element) SetUniformBytes(b []byte) (*Element, error) {
 	if len(b) != 64 {
 		return nil, errors.New("ristretto: SetUniformBytes input is not 64 bytes long")
@@ -207,7 +204,34 @@ func mapToPoint(out *edwards25519.Point, t *field.Element) {
 	}
 }
 
+// Encode appends the 32 bytes canonical encoding of e to b
+// and returns the result.
+//
+// Deprecated: use Bytes. This API will be removed before v1.0.0.
+func (e *Element) Encode(b []byte) []byte {
+	ret, out := sliceForAppend(b, 32)
+	e.bytes(out)
+	return ret
+}
+
+// sliceForAppend takes a slice and a requested number of bytes. It returns a
+// slice with the contents of the given slice followed by that many bytes and a
+// second slice that aliases into it and contains only the extra bytes. If the
+// original slice has sufficient capacity then no allocation is performed.
+func sliceForAppend(in []byte, n int) (head, tail []byte) {
+	if total := len(in) + n; cap(in) >= total {
+		head = in[:total]
+	} else {
+		head = make([]byte, total)
+		copy(head, in)
+	}
+	tail = head[len(in):]
+	return
+}
+
 // Bytes returns the 32 bytes canonical encoding of e.
+//
+// Bytes implements the Encode operation from RFC 9496, Section 4.3.2.
 func (e *Element) Bytes() []byte {
 	// Bytes is outlined to let the allocation happen on the stack of the caller.
 	b := make([]byte, 32)
@@ -277,9 +301,20 @@ func (e *Element) bytes(b []byte) []byte {
 
 var errInvalidEncoding = errors.New("ristretto: invalid element encoding")
 
+// Decode sets e to the decoded value of in. If in is not a 32 byte canonical
+// encoding, Decode returns an error, and the receiver is unchanged.
+//
+// Deprecated: use SetCanonicalBytes. This API will be removed before v1.0.0.
+func (e *Element) Decode(in []byte) error {
+	_, err := e.SetCanonicalBytes(in)
+	return err
+}
+
 // SetCanonicalBytes sets e to the decoded value of in. If in is not a canonical
 // encoding of s, SetCanonicalBytes returns nil and an error and the receiver is
 // unchanged.
+//
+// SetCanonicalBytes implements the Decode operation from RFC 9496, Section 4.3.1.
 func (e *Element) SetCanonicalBytes(in []byte) (*Element, error) {
 	if len(in) != 32 {
 		return nil, errInvalidEncoding
@@ -352,13 +387,13 @@ func (e *Element) SetCanonicalBytes(in []byte) (*Element, error) {
 
 // ScalarBaseMult sets e = s * B, where B is the canonical generator, and returns e.
 func (e *Element) ScalarBaseMult(s *Scalar) *Element {
-	e.r.ScalarBaseMult(s)
+	e.r.ScalarBaseMult(&s.s)
 	return e
 }
 
 // ScalarMult sets e = s * p, and returns e.
 func (e *Element) ScalarMult(s *Scalar, p *Element) *Element {
-	e.r.ScalarMult(s, &p.r)
+	e.r.ScalarMult(&s.s, &p.r)
 	return e
 }
 
@@ -370,10 +405,12 @@ func (e *Element) MultiScalarMult(s []*Scalar, p []*Element) *Element {
 		panic("ristretto: MultiScalarMult invoked with mismatched slice lengths")
 	}
 	points := make([]*edwards25519.Point, len(p))
+	scalars := make([]*edwards25519.Scalar, len(s))
 	for i := range s {
 		points[i] = &p[i].r
+		scalars[i] = &s[i].s
 	}
-	e.r.MultiScalarMult(s, points)
+	e.r.MultiScalarMult(scalars, points)
 	return e
 }
 
@@ -385,10 +422,12 @@ func (e *Element) VarTimeMultiScalarMult(s []*Scalar, p []*Element) *Element {
 		panic("ristretto: VarTimeMultiScalarMult invoked with mismatched slice lengths")
 	}
 	points := make([]*edwards25519.Point, len(p))
+	scalars := make([]*edwards25519.Scalar, len(s))
 	for i := range s {
 		points[i] = &p[i].r
+		scalars[i] = &s[i].s
 	}
-	e.r.VarTimeMultiScalarMult(s, points)
+	e.r.VarTimeMultiScalarMult(scalars, points)
 	return e
 }
 
@@ -397,7 +436,7 @@ func (e *Element) VarTimeMultiScalarMult(s []*Scalar, p []*Element) *Element {
 //
 // Execution time depends on the inputs.
 func (e *Element) VarTimeDoubleScalarBaseMult(a *Scalar, A *Element, b *Scalar) *Element {
-	e.r.VarTimeDoubleScalarBaseMult(a, &A.r, b)
+	e.r.VarTimeDoubleScalarBaseMult(&a.s, &A.r, &b.s)
 	return e
 }
 
@@ -421,20 +460,17 @@ func (e *Element) Negate(p *Element) *Element {
 
 // MarshalText implements encoding/TextMarshaler interface
 func (e *Element) MarshalText() (text []byte, err error) {
-	b := e.bytes(make([]byte, 32))
+	b := e.Encode([]byte{})
 	return []byte(base64.StdEncoding.EncodeToString(b)), nil
 }
 
 // UnmarshalText implements encoding/TextMarshaler interface
 func (e *Element) UnmarshalText(text []byte) error {
 	eb, err := base64.StdEncoding.DecodeString(string(text))
-	if err != nil {
-		return err
+	if err == nil {
+		return e.Decode(eb)
 	}
-	if _, err = e.SetCanonicalBytes(eb); err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // String implements the Stringer interface
